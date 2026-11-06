@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>GPS Tracker</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+  #map { position: absolute; inset: 0; }
+
+  #topbar {
+    position: absolute; top: 0; left: 0; right: 0;
+    background: rgba(0,0,0,0.78); color: white;
+    padding: 8px 15px;
+    display: flex; align-items: center; gap: 8px;
+    z-index: 1000;
+    font-size: 14px;
+    padding-top: max(8px, env(safe-area-inset-top));
+  }
+  .status-dot {
+    width: 11px; height: 11px; border-radius: 50%;
+    background: #f44336; flex-shrink: 0;
+    transition: background 0.3s;
+  }
+  .status-dot.connected { background: #4CAF50; box-shadow: 0 0 8px #4CAF50; }
+  #status { flex: 1; }
+  #fixInfo { font-size: 11px; opacity: 0.6; margin-left: auto; }
+
+  #actions {
+    position: absolute; right: 15px; bottom: 110px;
+    display: flex; flex-direction: column; gap: 10px;
+    z-index: 1000;
+  }
+  #actions button {
+    width: 52px; height: 52px; border-radius: 50%;
+    border: none; color: white; font-size: 22px;
+    cursor: pointer; box-shadow: 0 3px 8px rgba(0,0,0,0.4);
+    transition: background 0.2s, transform 0.1s;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #actions button:active { transform: scale(0.92); }
+  #connectBtn { background: #2196F3; }
+  #connectBtn.connected { background: #4CAF50; }
+  #followBtn { background: #607D8B; }
+  #followBtn.active { background: #FF9800; }
+  #resetBtn { background: #f44336; }
+  #demoBtn { background: #9C27B0; }
+  #demoBtn.active { background: #E91E63; }
+
+  #panel {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: rgba(15,15,15,0.85);
+    color: white;
+    padding: 12px 10px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    z-index: 1000;
+    backdrop-filter: blur(8px);
+  }
+  .stat { text-align: center; }
+  .stat .value {
+    font-size: 20px; font-weight: 700;
+    color: #4CAF50;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+  }
+  .stat .value.warn { color: #FF9800; }
+  .stat .label {
+    font-size: 10px; opacity: 0.65;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    margin-top: 2px;
+  }
+
+  #message {
+    position: absolute; top: 52px; left: 15px; right: 15px;
+    background: rgba(244, 67, 54, 0.95); color: white;
+    padding: 10px 14px; border-radius: 6px;
+    display: none; font-size: 13px;
+    z-index: 1001;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.3);
+  }
+
+  .leaflet-control-attribution { font-size: 9px !important; }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="topbar">
+  <span class="status-dot" id="statusDot"></span>
+  <span id="status">Disconnesso</span>
+  <span id="fixInfo"></span>
+</div>
+
+<div id="message"></div>
+
+<div id="actions">
+  <button id="connectBtn" title="Connetti ESP32">📶</button>
+  <button id="demoBtn" title="Demo GPS telefono">📍</button>
+  <button id="followBtn" class="active" title="Segui posizione">🎯</button>
+  <button id="resetBtn" title="Reset tracciato">↺</button>
+</div>
+
+<div id="panel">
+  <div class="stat"><div class="value" id="speed">0.0</div><div class="label">km/h</div></div>
+  <div class="stat"><div class="value" id="distance">0 m</div><div class="label">distanza</div></div>
+  <div class="stat"><div class="value" id="time">00:00</div><div class="label">tempo</div></div>
+  <div class="stat"><div class="value" id="avgSpeed">0.0</div><div class="label">media km/h</div></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ============================================================
+// CONFIGURAZIONE
+// ============================================================
+const SERVICE_UUID        = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
+const CHARACTERISTIC_UUID = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
+const MIN_DIST            = 3;   // metri minimi per aggiungere un punto al tracciato
+const MAX_SPEED_KMH       = 300; // filtro di sicurezza
+const DEFAULT_VIEW        = [41.9028, 12.4964]; // Roma
+
+// ============================================================
+// STATO APPLICAZIONE
+// ============================================================
+const state = {
+  device: null,
+  characteristic: null,
+  connected: false,
+  demoMode: false,
+  watchId: null,
+
+  marker: null,
+  polyline: null,
+  points: [],
+
+  lastFix: null,      // {lat, lng, time} - ultimo punto effettivamente aggiunto
+  startTime: null,
+  totalDistance: 0,   // metri
+  currentSpeed: 0,    // km/h
+  maxSpeed: 0,
+  followMode: true,
+  firstFix: true,
+};
+
+// ============================================================
+// MAPPA
+// ============================================================
+const map = L.map('map', {
+  zoomControl: false,
+  attributionControl: true,
+}).setView(DEFAULT_VIEW, 15);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap'
+}).addTo(map);
+
+state.polyline = L.polyline([], {
+  color: '#f44336',
+  weight: 5,
+  opacity: 0.9,
+  lineJoin: 'round',
+}).addTo(map);
+
+// ============================================================
+// UTILITY MATEMATICHE
+// ============================================================
+// Distanza in metri tra due coordinate (formula di Haversine)
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * toRad;
+  const dLon = (lon2 - lon1) * toRad;
+  const a = Math.sin(dLat / 2) ** 2 +
+            Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) *
+            Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatTime(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const pad = n => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+function formatDistance(meters) {
+  if (meters < 1000) return Math.round(meters) + ' m';
+  return (meters / 1000).toFixed(2) + ' km';
+}
+
+// ============================================================
+// AGGIORNAMENTO INTERFACCIA
+// ============================================================
+function updateUI() {
+  // Velocità istantanea
+  const speedEl = document.getElementById('speed');
+  speedEl.textContent = state.currentSpeed.toFixed(1);
+  speedEl.classList.toggle('warn', state.currentSpeed > 130);
+
+  // Distanza
+  document.getElementById('distance').textContent = formatDistance(state.totalDistance);
+
+  // Tempo e media
+  if (state.startTime) {
+    const elapsed = (Date.now() - state.startTime) / 1000;
+    document.getElementById('time').textContent = formatTime(elapsed);
+    const avg = elapsed > 0
+      ? (state.totalDistance / 1000) / (elapsed / 3600)
+      : 0;
+    document.getElementById('avgSpeed').textContent = avg.toFixed(1);
+  } else {
+    document.getElementById('time').textContent = '00:00';
+    document.getElementById('avgSpeed').textContent = '0.0';
+  }
+
+  // Info punti
+  document.getElementById('fixInfo').textContent =
+    state.points.length > 0 ? `${state.points.length} pt` : '';
+}
+
+setInterval(updateUI, 1000);
+
+// ============================================================
+// GESTIONE POSIZIONE (cuore dell'app)
+// ============================================================
+function handleGPSPosition(lat, lng, speedKmh) {
+  // Validazione
+  if (!isFinite(lat) || !isFinite(lng)) return;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return;
+  if (lat === 0 && lng === 0) return; // nessun fix
+
+  const now = Date.now();
+  const point = [lat, lng];
+
+  // --- Primo fix ---
+  if (state.firstFix) {
+    state.startTime = now;
+    state.lastFix = { lat, lng, time: now };
+    state.points.push(point);
+    state.polyline.addLatLng(point);
+
+    if (state.marker) map.removeLayer(state.marker);
+    state.marker = L.marker(point).addTo(map);
+
+    map.setView(point, 17);
+    state.firstFix = false;
+
+    if (isFinite(speedKmh) && speedKmh >= 0) state.currentSpeed = speedKmh;
+    updateUI();
+    return;
+  }
+
+  // --- Aggiorna velocità istantanea (fornita dal modulo GPS) ---
+  if (isFinite(speedKmh) && speedKmh >= 0 && speedKmh < MAX_SPEED_KMH) {
+    state.currentSpeed = speedKmh;
+    if (speedKmh > state.maxSpeed) state.maxSpeed = speedKmh;
+  }
+
+  // --- Calcolo distanza dal punto precedente effettivamente memorizzato ---
+  const dist = haversine(state.lastFix.lat, state.lastFix.lng, lat, lng);
+
+  if (dist >= MIN_DIST) {
+    state.totalDistance += dist;
+    state.lastFix = { lat, lng, time: now };
+    state.points.push(point);
+    state.polyline.addLatLng(point);
+
+    if (!state.marker) {
+      state.marker = L.marker(point).addTo(map);
+    } else {
+      state.marker.setLatLng(point);
+    }
+
+    if (state.followMode) {
+      map.panTo(point, { animate: true, duration: 0.4 });
+    }
+
+    updateUI();
+  } else if (!state.marker) {
+    // crea comunque il marker se per qualche motivo non esiste
+    state.marker = L.marker(point).addTo(map);
+  }
+}
+
+// ============================================================
+// BLUETOOTH BLE
+// ============================================================
+async function connectBLE() {
+  if (!navigator.bluetooth) {
+    showMessage('Web Bluetooth non supportato. Serve Chrome su Android con HTTPS.');
+    return;
+  }
+
+  try {
+    setStatus('Ricerca dispositivo…', false);
+
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'ESP32' }],
+      optionalServices: [SERVICE_UUID],
+    });
+
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+
+    const server  = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    const char    = await service.getCharacteristic(CHARACTERISTIC_UUID);
+
+    await char.startNotifications();
+    char.addEventListener('characteristicvaluechanged', onBLEValue);
+
+    state.device = device;
+    state.characteristic = char;
+    state.connected = true;
+
+    setStatus(`Connesso: ${device.name || 'ESP32'}`, true);
+    document.getElementById('connectBtn').classList.add('connected');
+    document.getElementById('connectBtn').textContent = '⏻';
+    updateUI();
+
+  } catch (err) {
+    console.error(err);
+    showMessage('Errore: ' + err.message);
+    setStatus('Disconnesso', false);
+  }
+}
+
+function onDisconnected() {
+  state.connected = false;
+  state.characteristic = null;
+  setStatus('Disconnesso', false);
+  document.getElementById('connectBtn').classList.remove('connected');
+  document.getElementById('connectBtn').textContent = '📶';
+  showMessage('Dispositivo disconnesso');
+}
+
+function onBLEValue(event) {
+  const value = event.target.value;
+  const text  = new TextDecoder('utf-8').decode(value).trim();
+  // Formato atteso dall'ESP32: "lat,lng,speed"
+  const parts = text.split(',');
+  if (parts.length >= 2) {
+    const lat   = parseFloat(parts[0]);
+    const lng   = parseFloat(parts[1]);
+    const speed = parts[2] !== undefined ? parseFloat(parts[2]) : 0;
+    handleGPSPosition(lat, lng, speed);
+  }
+}
+
+async function disconnectBLE() {
+  try {
+    if (state.device && state.device.gatt.connected) {
+      state.device.gatt.disconnect();
+    }
+  } catch (e) { /* ignora */ }
+}
+
+// ============================================================
+// DEMO: GPS del telefono (utile per test senza ESP32)
+// ============================================================
+function toggleDemo() {
+  const btn = document.getElementById('demoBtn');
+  if (state.demoMode) {
+    if (state.watchId) navigator.geolocation.clearWatch(state.watchId);
+    state.watchId = null;
+    state.demoMode = false;
+    btn.classList.remove('active');
+    setStatus('Disconnesso', false);
+    return;
+  }
+  if (!navigator.geolocation) {
+    showMessage('Geolocalizzazione non supportata');
+    return;
+  }
+  state.demoMode = true;
+  btn.classList.add('active');
+  setStatus('Demo: GPS telefono', true);
+
+  state.watchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      const speed = pos.coords.speed != null ? pos.coords.speed * 3.6 : 0;
+      handleGPSPosition(pos.coords.latitude, pos.coords.longitude, speed);
+    },
+    (err) => showMessage('Errore GPS: ' + err.message),
+    { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 }
+  );
+}
+
+// ============================================================
+// CONTROLLI UI
+// ============================================================
+function resetTrack() {
+  state.polyline.setLatLngs([]);
+  state.points = [];
+  state.lastFix = null;
+  state.startTime = null;
+  state.totalDistance = 0;
+  state.currentSpeed = 0;
+  state.maxSpeed = 0;
+  state.firstFix = true;
+  if (state.marker) {
+    map.removeLayer(state.marker);
+    state.marker = null;
+  }
+  updateUI();
+  showMessage('Tracciato azzerato');
+}
+
+function toggleFollow() {
+  state.followMode = !state.followMode;
+  document.getElementById('followBtn').classList.toggle('active', state.followMode);
+  if (state.followMode && state.marker) {
+    map.panTo(state.marker.getLatLng(), { animate: true });
+  }
+}
+
+function setStatus(text, connected) {
+  document.getElementById('status').textContent = text;
+  document.getElementById('statusDot').classList.toggle('connected', connected);
+}
+
+let messageTimer;
+function showMessage(msg) {
+  const el = document.getElementById('message');
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(messageTimer);
+  messageTimer = setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+// ============================================================
+// EVENTI
+// ============================================================
+document.getElementById('connectBtn').addEventListener('click', () => {
+  if (state.connected) disconnectBLE();
+  else connectBLE();
+});
+document.getElementById('demoBtn').addEventListener('click', toggleDemo);
+document.getElementById('followBtn').addEventListener('click', toggleFollow);
+document.getElementById('resetBtn').addEventListener('click', resetTrack);
+
+// Avviso HTTPS
+if (location.protocol !== 'https:' &&
+    !['localhost', '127.0.0.1'].includes(location.hostname)) {
+  showMessage('⚠️ Web Bluetooth richiede HTTPS. Carica questa pagina via HTTPS (es. GitHub Pages, Netlify, ngrok).');
+}
+
+// Avvio
+setStatus('Disconnesso', false);
+updateUI();
+</script>
+</body>
+</html>
