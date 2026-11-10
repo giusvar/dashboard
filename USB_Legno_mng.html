@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camper</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#181c24; --accent:#3ddc84;
+    --text:#e8eaed; --muted:#8a919e; --border:#2a2f3a; --warn:#ffb74d;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; font-family:'Segoe UI',Roboto,sans-serif; background:var(--bg); color:var(--text); padding:24px; display:flex; justify-content:center;}
+  .wrap{width:100%; max-width:480px;}
+  .top{display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;}
+  h1{font-size:1.3rem; font-weight:600; margin:0;}
+  .gear{background:none; border:1px solid var(--border); color:var(--muted); border-radius:10px; padding:6px 12px; cursor:pointer; font-size:0.85rem;}
+  .card{background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px 18px; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between;}
+  .card .label{font-size:0.95rem; font-weight:500;}
+  .card .sub{font-size:0.75rem; color:var(--muted); margin-top:2px;}
+  .switch{position:relative; width:52px; height:28px; flex-shrink:0;}
+  .switch input{opacity:0; width:0; height:0;}
+  .slider{position:absolute; inset:0; background:#333; border-radius:28px; cursor:pointer; transition:.2s;}
+  .slider:before{content:""; position:absolute; width:22px; height:22px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s;}
+  input:checked + .slider{background:var(--accent);}
+  input:checked + .slider:before{transform:translateX(24px);}
+  input:focus-visible + .slider{outline:2px solid var(--text); outline-offset:2px;}
+  .mode-row{display:flex; gap:8px; margin-top:8px;}
+  .mode-btn{flex:1; text-align:center; padding:8px 14px; border-radius:10px; font-size:0.8rem; border:1px solid var(--border); cursor:pointer; color:var(--muted); background:transparent;}
+  .mode-btn.active{background:var(--accent); color:#04140a; border-color:var(--accent); font-weight:600;}
+  .switch.disabled{opacity:0.4; pointer-events:none;}
+  #status{font-size:0.78rem; color:var(--muted); margin-top:4px; min-height:1.2em;}
+  #status.err{color:var(--warn);}
+
+  dialog{background:var(--card); color:var(--text); border:1px solid var(--border); border-radius:14px; padding:20px; width:min(92vw,440px);}
+  dialog::backdrop{background:rgba(0,0,0,.6);}
+  dialog h2{margin:0 0 6px; font-size:1.05rem;}
+  dialog p{margin:0 0 14px; font-size:0.8rem; color:var(--muted); line-height:1.4;}
+  dialog label{display:block; font-size:0.8rem; margin:10px 0 4px;}
+  dialog input[type=text], dialog input[type=password]{width:100%; padding:9px 10px; border-radius:8px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:0.9rem;}
+  .actions{display:flex; gap:8px; justify-content:flex-end; margin-top:18px;}
+  .actions button{padding:8px 16px; border-radius:10px; border:1px solid var(--border); background:transparent; color:var(--text); cursor:pointer;}
+  .actions button.primary{background:var(--accent); color:#04140a; border-color:var(--accent); font-weight:600;}
+
+  /* --- Schede (Prese USB / Modem 4G) --- */
+  .tabs{display:flex; gap:8px; margin-bottom:16px;}
+  .tab{flex:1; padding:9px 12px; border-radius:10px; border:1px solid var(--border); background:transparent; color:var(--muted); font-size:0.9rem; cursor:pointer;}
+  .tab.active{background:var(--card); color:var(--text); border-color:var(--accent);}
+  .tab:focus-visible{outline:2px solid var(--text); outline-offset:2px;}
+
+  /* --- Modem 4G --- */
+  .mstatus{display:flex; align-items:center; gap:8px; font-size:0.8rem; color:var(--muted); margin-bottom:12px;}
+  .dot{width:10px; height:10px; border-radius:50%; background:#666; flex-shrink:0;}
+  .dot.ok{background:var(--accent);}
+  .dot.stale{background:var(--warn);}
+  .mcard{background:var(--card); border:1px solid var(--border); border-radius:14px; padding:14px 18px; margin-bottom:12px;}
+  .mlabel{font-size:0.78rem; color:var(--muted);}
+  .mbig{font-size:2.2rem; font-weight:600; line-height:1.2; margin-top:2px;}
+  .munit{font-size:1rem; color:var(--muted); margin-left:2px;}
+  .bar{position:relative; height:10px; border-radius:6px; background:#2a2f3a; margin:10px 0 6px; overflow:hidden;}
+  .bar #mBatBar{height:100%; width:0; background:var(--accent); transition:width .4s;}
+  .tick{position:absolute; top:0; bottom:0; width:2px; background:var(--bg);}
+  .msub{font-size:0.75rem; color:var(--muted);}
+  .mgrid{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;}
+  .mgrid .mcard{margin-bottom:0;}
+  .mval{font-size:1.05rem; font-weight:500; margin-top:4px; word-break:break-word;}
+  .mval.warn{color:var(--warn);}
+  h2.sect{font-size:0.95rem; font-weight:600; margin:0 0 6px;}
+  .rows .row{display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-top:1px solid var(--border); font-size:0.85rem;}
+  .rows .row:first-child{border-top:none;}
+  .rows .row span:first-child{color:var(--muted);}
+  .rows .row span:last-child.warn{color:var(--warn);}
+
+  dialog{max-height:90vh; overflow:auto;}
+  .grp{margin:18px 0 0; font-size:0.85rem; font-weight:600; color:var(--accent);}
+  .grp:first-of-type{margin-top:6px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>Camper</h1>
+    <button class="gear" id="openCfg">Impostazioni</button>
+  </div>
+
+  <div class="tabs" role="tablist" aria-label="Sezioni">
+    <button class="tab active" id="tabUsb" role="tab" aria-selected="true" aria-controls="viewUsb">Prese USB</button>
+    <button class="tab" id="tabModem" role="tab" aria-selected="false" aria-controls="viewModem">Modem 4G</button>
+  </div>
+
+  <section id="viewUsb" role="tabpanel" aria-labelledby="tabUsb">
+    <div id="cards"></div>
+    <div id="status"></div>
+  </section>
+
+  <section id="viewModem" role="tabpanel" aria-labelledby="tabModem" hidden>
+    <div class="mstatus"><span class="dot" id="mDot"></span><span id="mStatus">In attesa dei dati…</span></div>
+
+    <div class="mcard">
+      <div class="mlabel">Carica batteria del modem</div>
+      <div class="mbig"><span id="mBat">--</span><span class="munit">%</span></div>
+      <div class="bar"><div id="mBatBar"></div><i class="tick" style="left:40%"></i><i class="tick" style="left:80%"></i></div>
+      <div class="msub">Soglie di USB4 in modalità Auto: 40% &ndash; 80%</div>
+    </div>
+
+    <div class="mgrid">
+      <div class="mcard"><div class="mlabel">Segnale</div><div class="mval" id="mSignal">--</div></div>
+      <div class="mcard"><div class="mlabel">Connessione dati</div><div class="mval" id="mConn">--</div></div>
+      <div class="mcard"><div class="mlabel">Tipo di rete</div><div class="mval" id="mNet">--</div></div>
+      <div class="mcard"><div class="mlabel">Operatore</div><div class="mval" id="mOp">--</div></div>
+      <div class="mcard"><div class="mlabel">Stato di ricarica</div><div class="mval" id="mChg">--</div></div>
+      <div class="mcard"><div class="mlabel">Dispositivi Wi-Fi</div><div class="mval" id="mDev">--</div></div>
+      <div class="mcard"><div class="mlabel">Roaming</div><div class="mval" id="mRoam">--</div></div>
+      <div class="mcard"><div class="mlabel">Roaming nazionale</div><div class="mval" id="mDom">--</div></div>
+    </div>
+
+    <div class="mcard" id="mDiagPanel" hidden>
+      <h2 class="sect">Diagnostica</h2>
+      <div class="rows">
+        <div class="row"><span>Errore profilo APN</span><span id="dApn">--</span></div>
+        <div class="row"><span>Codice errore</span><span id="dClear">--</span></div>
+        <div class="row"><span>Rifiuti PDP</span><span id="dPdp">--</span></div>
+        <div class="row"><span>Stato chiamata dati</span><span id="dDial">--</span></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<dialog id="cfgDlg">
+  <h2>Impostazioni</h2>
+  <p>I dati restano solo in questo browser (non sono nel codice della pagina). Vanno inseriti una volta per dispositivo.</p>
+
+  <div class="grp">Prese USB &ndash; canale comandi</div>
+  <label for="cChannel">ThingSpeak &ndash; Channel ID</label>
+  <input type="text" id="cChannel" inputmode="numeric" autocomplete="off">
+  <label for="cWrite">ThingSpeak &ndash; Write API Key</label>
+  <input type="password" id="cWrite" autocomplete="off">
+  <label for="cRead">ThingSpeak &ndash; Read API Key (vuota se il canale è pubblico)</label>
+  <input type="password" id="cRead" autocomplete="off">
+
+  <div class="grp">Modem 4G &ndash; solo lettura</div>
+  <label for="cModemCh">Canale &ldquo;Modem 4G &ndash; Stato&rdquo; &ndash; Channel ID</label>
+  <input type="text" id="cModemCh" inputmode="numeric" autocomplete="off">
+  <label for="cModemRead">Canale Stato &ndash; Read API Key (vuota se pubblico)</label>
+  <input type="password" id="cModemRead" autocomplete="off">
+  <label for="cDiagCh">Canale &ldquo;Modem 4G &ndash; Diagnostica&rdquo; &ndash; Channel ID (facoltativo)</label>
+  <input type="text" id="cDiagCh" inputmode="numeric" autocomplete="off">
+  <label for="cDiagRead">Canale Diagnostica &ndash; Read API Key (vuota se pubblico)</label>
+  <input type="password" id="cDiagRead" autocomplete="off">
+
+  <div class="grp">Telegram</div>
+  <label for="cBot">Bot token</label>
+  <input type="password" id="cBot" autocomplete="off">
+  <label for="cChat">Chat ID</label>
+  <input type="text" id="cChat" autocomplete="off">
+
+  <div class="actions">
+    <button id="cancelCfg">Annulla</button>
+    <button class="primary" id="saveCfg">Salva</button>
+  </div>
+</dialog>
+
+<script>
+// ---------- Configurazione ----------
+const NAMES = ["USB 1 (D1)", "USB 2 (D2)", "USB 3 (ex D5)", "USB 4 (D6)"];
+const LS_KEY = "camperUsbCfg";
+const MIN_GAP_MS = 16000;     // ThingSpeak free: almeno 15 s tra due scritture
+const POLL_MS    = 20000;     // rilettura periodica dello stato
+
+function loadCfg(){
+  try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch(e){ return {}; }
+}
+function saveCfg(c){
+  try { localStorage.setItem(LS_KEY, JSON.stringify(c)); } catch(e){}
+}
+let cfg = loadCfg();
+
+// ---------- Stato ----------
+// relays[2] e relays[3] = ultimo valore MANUALE degli switch 3 e 4 (in AUTO l'ESP32 del camper decide da solo)
+let state = {relays:[false,false,false,false], modes:{2:"MANUAL", 3:"MANUAL"}};
+let pendingMsgs = [];   // messaggi Telegram in attesa di conferma da ThingSpeak
+let busy = false;
+let lastWrite = 0;
+
+// ---------- Interfaccia ----------
+const AUTO_SUB = {
+  2: "Controllato da soglia batteria (camper)",
+  3: "Controllato da batteria modem 4G"
+};
+
+function render(){
+  let html = "";
+  for(let i=0; i<4; i++){
+    const hasAuto = (i === 2 || i === 3);
+    const auto = hasAuto && state.modes[i] === 'AUTO';
+    let extra = "";
+    if(hasAuto){
+      extra = `
+        <div class="mode-row">
+          <div class="mode-btn ${!auto ? 'active' : ''}" onclick="setMode(${i}, 'MANUAL')">Manuale</div>
+          <div class="mode-btn ${auto ? 'active' : ''}" onclick="setMode(${i}, 'AUTO')">Auto</div>
+        </div>`;
+    }
+    const disabled = auto ? 'disabled' : '';
+    html += `
+      <div class="card">
+        <div>
+          <div class="label">${NAMES[i]}</div>
+          ${hasAuto ? `<div class="sub">${auto ? AUTO_SUB[i] : 'Controllo manuale'}</div>` : ''}
+          ${extra}
+        </div>
+        <label class="switch ${disabled}">
+          <input type="checkbox" ${state.relays[i] ? 'checked' : ''} onchange="toggleRelay(${i}, this.checked)">
+          <span class="slider"></span>
+        </label>
+      </div>`;
+  }
+  document.getElementById("cards").innerHTML = html;
+}
+
+function setStatus(msg, isErr){
+  const el = document.getElementById("status");
+  el.textContent = msg;
+  el.className = isErr ? "err" : "";
+}
+
+// ---------- Azioni ----------
+function toggleRelay(idx, on){
+  state.relays[idx] = on;
+  pendingMsgs.push(`${NAMES[idx]}: ${on ? 'ACCESO' : 'SPENTO'}`);
+  render();
+  flush();
+}
+function setMode(idx, m){
+  if(state.modes[idx] === m) return;
+  state.modes[idx] = m;
+  pendingMsgs.push(m === 'AUTO'
+    ? `${NAMES[idx]}: modalità AUTO`
+    : `${NAMES[idx]}: modalità MANUALE (${state.relays[idx] ? 'ACCESO' : 'SPENTO'})`);
+  render();
+  flush();
+}
+
+// ---------- ThingSpeak: scrittura ----------
+// Valore da scrivere nel campo dello switch idx: 0/1 manuale, 2 = AUTO (solo switch 3 e 4)
+function fieldValue(idx){
+  if((idx === 2 || idx === 3) && state.modes[idx] === 'AUTO') return 2;
+  return state.relays[idx] ? 1 : 0;
+}
+
+function flush(){
+  if(busy || pendingMsgs.length === 0) return;
+  if(!cfg.channel || !cfg.writeKey){ openCfg(); return; }
+  busy = true;
+  const wait = Math.max(0, MIN_GAP_MS - (Date.now() - lastWrite));
+  setStatus(wait > 0 ? `Invio tra ${Math.ceil(wait/1000)} s…` : "Invio in corso…");
+  setTimeout(sendToThingSpeak, wait);
+}
+
+async function sendToThingSpeak(){
+  // scrive sempre tutti e 4 i campi con lo stato attuale (raggruppa più azioni ravvicinate)
+  const msgs = pendingMsgs;
+  pendingMsgs = [];
+  const url = "https://api.thingspeak.com/update?api_key=" + encodeURIComponent(cfg.writeKey)
+    + "&field1=" + fieldValue(0)
+    + "&field2=" + fieldValue(1)
+    + "&field3=" + fieldValue(2)
+    + "&field4=" + fieldValue(3);
+  try{
+    const r = await fetch(url);
+    const t = (await r.text()).trim();
+    if(!r.ok || t === "0") throw new Error("rifiutato da ThingSpeak");
+    lastWrite = Date.now();
+    setStatus("Salvato su ThingSpeak alle " + new Date().toLocaleTimeString("it-IT"));
+    sendTelegram(msgs);
+  }catch(e){
+    pendingMsgs = msgs.concat(pendingMsgs);   // riprova
+    lastWrite = Date.now();
+    setStatus("Invio non riuscito (" + e.message + "), riprovo…", true);
+  }
+  busy = false;
+  flush();
+}
+
+// ---------- Telegram ----------
+async function sendTelegram(msgs){
+  if(!cfg.botToken || !cfg.chatId){ return; }
+  const text = "Camper USB\n" + msgs.join("\n");
+  try{
+    const r = await fetch("https://api.telegram.org/bot" + encodeURIComponent(cfg.botToken)
+      + "/sendMessage?chat_id=" + encodeURIComponent(cfg.chatId)
+      + "&text=" + encodeURIComponent(text));
+    if(!r.ok) throw new Error("HTTP " + r.status);
+  }catch(e){
+    setStatus("Salvato, ma messaggio Telegram non inviato (" + e.message + ")", true);
+  }
+}
+
+// ---------- ThingSpeak: lettura ----------
+async function readField(n){
+  let url = `https://api.thingspeak.com/channels/${encodeURIComponent(cfg.channel)}/fields/${n}/last.json`;
+  if(cfg.readKey) url += "?api_key=" + encodeURIComponent(cfg.readKey);
+  const r = await fetch(url, {cache:"no-store"});
+  if(!r.ok) throw new Error("HTTP " + r.status);
+  const j = await r.json();
+  const v = j["field" + n];
+  return (v === undefined || v === null) ? null : String(v).trim();
+}
+
+async function refresh(){
+  if(busy || pendingMsgs.length > 0) return;       // non sovrascrivere modifiche in corso
+  if(!cfg.channel){ return; }
+  try{
+    const v = await Promise.all([1,2,3,4].map(readField));
+    if(busy || pendingMsgs.length > 0) return;
+    [0,1].forEach(i => { if(v[i] !== null) state.relays[i] = (v[i] === "1"); });
+    [2,3].forEach(i => {
+      if(v[i] !== null){
+        if(v[i] === "2"){ state.modes[i] = "AUTO"; }
+        else { state.modes[i] = "MANUAL"; state.relays[i] = (v[i] === "1"); }
+      }
+    });
+    render();
+    setStatus("Aggiornato alle " + new Date().toLocaleTimeString("it-IT"));
+  }catch(e){
+    setStatus("Lettura non riuscita (" + e.message + ")", true);
+  }
+}
+
+// ---------- Modem 4G: dati letti da ThingSpeak ----------
+// L'ESP32 del camper legge il modem e pubblica i dati sui canali "Modem 4G - Stato" e
+// "Modem 4G - Diagnostica" (una volta al minuto): la pagina legge solo l'ultima entry.
+const MODEM_POLL_MS  = 60000;
+const MODEM_STALE_MS = 5 * 60000;   // oltre 5 minuti senza nuovi dati: "non aggiornati"
+const $ = id => document.getElementById(id);
+let modemStamp = null;              // istante dell'ultimo dato ricevuto da ThingSpeak
+
+const NET_TYPES = {8: "LTE (4G)"};
+const CONN_TEXT = {0: "Disattivata", 2: "Attiva"};
+const YES_NO    = {0: "No", 1: "Sì"};
+
+async function lastFeed(channel, key){
+  let url = `https://api.thingspeak.com/channels/${encodeURIComponent(channel)}/feeds/last.json?status=true`;
+  if(key) url += "&api_key=" + encodeURIComponent(key);
+  const r = await fetch(url, {cache:"no-store"});
+  if(!r.ok) throw new Error("HTTP " + r.status);
+  const j = await r.json();
+  if(!j || typeof j !== "object" || !j.created_at) throw new Error("nessun dato nel canale");
+  return j;
+}
+
+function num(feed, n){
+  if(!feed) return null;
+  const v = feed["field" + n];
+  if(v === undefined || v === null || String(v).trim() === "") return null;
+  const x = Number(v);
+  return Number.isFinite(x) ? x : null;
+}
+function put(id, text, warn){
+  const el = $(id);
+  el.textContent = text;
+  el.classList.toggle("warn", !!warn);
+}
+function mapped(map, v){
+  if(v === null) return "--";
+  return map[v] !== undefined ? map[v] : "codice " + v;
+}
+function raw(v){ return v === null ? "--" : String(v); }
+function ago(ms){
+  const s = Math.max(0, Math.round(ms / 1000));
+  if(s < 60) return s + " s";
+  const m = Math.floor(s / 60);
+  if(m < 60) return m + " min";
+  const h = Math.floor(m / 60);
+  if(h < 48) return h + " h";
+  return Math.floor(h / 24) + " giorni";
+}
+
+function setModemStatus(kind, text){
+  $("mDot").className = "dot" + (kind ? " " + kind : "");
+  $("mStatus").textContent = text;
+}
+function updateAgeLabel(){
+  if(modemStamp === null) return;
+  const age = Date.now() - modemStamp;
+  if(age > MODEM_STALE_MS){
+    setModemStatus("stale", "Dati non aggiornati da " + ago(age) + ": controlla centralina e modem");
+  }else{
+    setModemStatus("ok", "Dati aggiornati " + ago(age) + " fa");
+  }
+}
+
+function renderModem(s, d){
+  const bat = num(s, 1), chg = num(s, 2), sig = num(s, 3), conn = num(s, 5), dev = num(s, 8);
+  put("mBat", raw(bat));
+  $("mBatBar").style.width = bat === null ? "0%" : Math.max(0, Math.min(100, bat)) + "%";
+  put("mChg", chg === null ? "--" : "valore " + chg);
+  put("mSignal", sig === null ? "--" : sig + (sig === 1 ? " tacca" : " tacche"), sig === 0);
+  put("mNet", mapped(NET_TYPES, num(s, 4)));
+  put("mConn", mapped(CONN_TEXT, conn), conn !== null && conn !== 2);
+  put("mRoam", mapped(YES_NO, num(s, 6)));
+  put("mDom", mapped(YES_NO, num(s, 7)));
+  put("mDev", raw(dev));
+  put("mOp", s.status ? String(s.status) : "--");
+
+  $("mDiagPanel").hidden = !cfg.diagChannel;
+  put("dApn",   raw(num(d, 1)));
+  put("dClear", raw(num(d, 2)));
+  put("dPdp",   raw(num(d, 3)));
+  put("dDial",  raw(num(d, 4)));
+
+  const t = new Date(s.created_at).getTime();
+  modemStamp = Number.isFinite(t) ? t : Date.now();
+  updateAgeLabel();
+}
+
+async function refreshModem(){
+  if(!cfg.modemChannel){
+    modemStamp = null;
+    setModemStatus("", "Imposta il canale “Modem 4G – Stato” nelle Impostazioni");
+    return;
+  }
+  try{
+    const [s, d] = await Promise.all([
+      lastFeed(cfg.modemChannel, cfg.modemRead),
+      cfg.diagChannel ? lastFeed(cfg.diagChannel, cfg.diagRead).catch(() => null) : Promise.resolve(null)
+    ]);
+    renderModem(s, d);
+  }catch(e){
+    modemStamp = null;
+    setModemStatus("", "Lettura non riuscita (" + e.message + ")");
+  }
+}
+
+// ---------- Schede ----------
+function showTab(name){
+  const modem = (name === "modem");
+  $("viewUsb").hidden = modem;
+  $("viewModem").hidden = !modem;
+  $("tabUsb").classList.toggle("active", !modem);
+  $("tabModem").classList.toggle("active", modem);
+  $("tabUsb").setAttribute("aria-selected", String(!modem));
+  $("tabModem").setAttribute("aria-selected", String(modem));
+  try{ history.replaceState(null, "", modem ? "#modem" : "#usb"); }catch(e){}
+  if(modem) refreshModem();
+}
+$("tabUsb").onclick = () => showTab("usb");
+$("tabModem").onclick = () => showTab("modem");
+window.addEventListener("hashchange", () => showTab(location.hash === "#modem" ? "modem" : "usb"));
+
+// ---------- Impostazioni ----------
+const dlg = $("cfgDlg");
+function openCfg(){
+  $("cChannel").value   = cfg.channel     || "";
+  $("cWrite").value     = cfg.writeKey    || "";
+  $("cRead").value      = cfg.readKey     || "";
+  $("cModemCh").value   = cfg.modemChannel || "";
+  $("cModemRead").value = cfg.modemRead   || "";
+  $("cDiagCh").value    = cfg.diagChannel || "";
+  $("cDiagRead").value  = cfg.diagRead    || "";
+  $("cBot").value       = cfg.botToken    || "";
+  $("cChat").value      = cfg.chatId      || "";
+  if(!dlg.open) dlg.showModal();
+}
+$("openCfg").onclick = openCfg;
+$("cancelCfg").onclick = () => dlg.close();
+$("saveCfg").onclick = () => {
+  cfg = {
+    channel:      $("cChannel").value.trim(),
+    writeKey:     $("cWrite").value.trim(),
+    readKey:      $("cRead").value.trim(),
+    modemChannel: $("cModemCh").value.trim(),
+    modemRead:    $("cModemRead").value.trim(),
+    diagChannel:  $("cDiagCh").value.trim(),
+    diagRead:     $("cDiagRead").value.trim(),
+    botToken:     $("cBot").value.trim(),
+    chatId:       $("cChat").value.trim()
+  };
+  saveCfg(cfg);
+  dlg.close();
+  refresh();
+  refreshModem();
+  flush();
+};
+
+// ---------- Avvio ----------
+render();
+if(!cfg.channel || !cfg.writeKey){ openCfg(); } else { refresh(); }
+showTab(location.hash === "#modem" ? "modem" : "usb");
+refreshModem();
+setInterval(refresh, POLL_MS);
+setInterval(refreshModem, MODEM_POLL_MS);
+setInterval(updateAgeLabel, 15000);
+</script>
+</body>
+</html>
