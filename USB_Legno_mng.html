@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camper USB Control</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#181c24; --accent:#3ddc84;
+    --text:#e8eaed; --muted:#8a919e; --border:#2a2f3a; --warn:#ffb74d;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; font-family:'Segoe UI',Roboto,sans-serif; background:var(--bg); color:var(--text); padding:24px; display:flex; justify-content:center;}
+  .wrap{width:100%; max-width:480px;}
+  .top{display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;}
+  h1{font-size:1.3rem; font-weight:600; margin:0;}
+  .gear{background:none; border:1px solid var(--border); color:var(--muted); border-radius:10px; padding:6px 12px; cursor:pointer; font-size:0.85rem;}
+  .card{background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px 18px; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between;}
+  .card .label{font-size:0.95rem; font-weight:500;}
+  .card .sub{font-size:0.75rem; color:var(--muted); margin-top:2px;}
+  .switch{position:relative; width:52px; height:28px; flex-shrink:0;}
+  .switch input{opacity:0; width:0; height:0;}
+  .slider{position:absolute; inset:0; background:#333; border-radius:28px; cursor:pointer; transition:.2s;}
+  .slider:before{content:""; position:absolute; width:22px; height:22px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s;}
+  input:checked + .slider{background:var(--accent);}
+  input:checked + .slider:before{transform:translateX(24px);}
+  input:focus-visible + .slider{outline:2px solid var(--text); outline-offset:2px;}
+  .mode-row{display:flex; gap:8px; margin-top:8px;}
+  .mode-btn{flex:1; text-align:center; padding:8px 14px; border-radius:10px; font-size:0.8rem; border:1px solid var(--border); cursor:pointer; color:var(--muted); background:transparent;}
+  .mode-btn.active{background:var(--accent); color:#04140a; border-color:var(--accent); font-weight:600;}
+  .switch.disabled{opacity:0.4; pointer-events:none;}
+  #status{font-size:0.78rem; color:var(--muted); margin-top:4px; min-height:1.2em;}
+  #status.err{color:var(--warn);}
+
+  dialog{background:var(--card); color:var(--text); border:1px solid var(--border); border-radius:14px; padding:20px; width:min(92vw,440px);}
+  dialog::backdrop{background:rgba(0,0,0,.6);}
+  dialog h2{margin:0 0 6px; font-size:1.05rem;}
+  dialog p{margin:0 0 14px; font-size:0.8rem; color:var(--muted); line-height:1.4;}
+  dialog label{display:block; font-size:0.8rem; margin:10px 0 4px;}
+  dialog input[type=text], dialog input[type=password]{width:100%; padding:9px 10px; border-radius:8px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:0.9rem;}
+  .actions{display:flex; gap:8px; justify-content:flex-end; margin-top:18px;}
+  .actions button{padding:8px 16px; border-radius:10px; border:1px solid var(--border); background:transparent; color:var(--text); cursor:pointer;}
+  .actions button.primary{background:var(--accent); color:#04140a; border-color:var(--accent); font-weight:600;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>Camper &middot; Prese USB</h1>
+    <button class="gear" id="openCfg">Impostazioni</button>
+  </div>
+  <div id="cards"></div>
+  <div id="status"></div>
+</div>
+
+<dialog id="cfgDlg">
+  <h2>Impostazioni</h2>
+  <p>I dati restano solo in questo browser (non sono nel codice della pagina). Vanno inseriti una volta per dispositivo.</p>
+  <label for="cChannel">ThingSpeak &ndash; Channel ID</label>
+  <input type="text" id="cChannel" inputmode="numeric" autocomplete="off">
+  <label for="cWrite">ThingSpeak &ndash; Write API Key</label>
+  <input type="password" id="cWrite" autocomplete="off">
+  <label for="cRead">ThingSpeak &ndash; Read API Key (vuota se il canale è pubblico)</label>
+  <input type="password" id="cRead" autocomplete="off">
+  <label for="cBot">Telegram &ndash; Bot token</label>
+  <input type="password" id="cBot" autocomplete="off">
+  <label for="cChat">Telegram &ndash; Chat ID</label>
+  <input type="text" id="cChat" autocomplete="off">
+  <div class="actions">
+    <button id="cancelCfg">Annulla</button>
+    <button class="primary" id="saveCfg">Salva</button>
+  </div>
+</dialog>
+
+<script>
+// ---------- Configurazione ----------
+const NAMES = ["USB 1 (D1)", "USB 2 (D2)", "USB 3 (ex D5)", "USB 4 (D6)"];
+const LS_KEY = "camperUsbCfg";
+const MIN_GAP_MS = 16000;     // ThingSpeak free: almeno 15 s tra due scritture
+const POLL_MS    = 20000;     // rilettura periodica dello stato
+
+function loadCfg(){
+  try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch(e){ return {}; }
+}
+function saveCfg(c){
+  try { localStorage.setItem(LS_KEY, JSON.stringify(c)); } catch(e){}
+}
+let cfg = loadCfg();
+
+// ---------- Stato ----------
+// relays[2] e relays[3] = ultimo valore MANUALE degli switch 3 e 4 (in AUTO l'ESP32 del camper decide da solo)
+let state = {relays:[false,false,false,false], modes:{2:"MANUAL", 3:"MANUAL"}};
+let pendingMsgs = [];   // messaggi Telegram in attesa di conferma da ThingSpeak
+let busy = false;
+let lastWrite = 0;
+
+// ---------- Interfaccia ----------
+const AUTO_SUB = {
+  2: "Controllato da soglia batteria (camper)",
+  3: "Controllato da batteria modem 4G"
+};
+
+function render(){
+  let html = "";
+  for(let i=0; i<4; i++){
+    const hasAuto = (i === 2 || i === 3);
+    const auto = hasAuto && state.modes[i] === 'AUTO';
+    let extra = "";
+    if(hasAuto){
+      extra = `
+        <div class="mode-row">
+          <div class="mode-btn ${!auto ? 'active' : ''}" onclick="setMode(${i}, 'MANUAL')">Manuale</div>
+          <div class="mode-btn ${auto ? 'active' : ''}" onclick="setMode(${i}, 'AUTO')">Auto</div>
+        </div>`;
+    }
+    const disabled = auto ? 'disabled' : '';
+    html += `
+      <div class="card">
+        <div>
+          <div class="label">${NAMES[i]}</div>
+          ${hasAuto ? `<div class="sub">${auto ? AUTO_SUB[i] : 'Controllo manuale'}</div>` : ''}
+          ${extra}
+        </div>
+        <label class="switch ${disabled}">
+          <input type="checkbox" ${state.relays[i] ? 'checked' : ''} onchange="toggleRelay(${i}, this.checked)">
+          <span class="slider"></span>
+        </label>
+      </div>`;
+  }
+  document.getElementById("cards").innerHTML = html;
+}
+
+function setStatus(msg, isErr){
+  const el = document.getElementById("status");
+  el.textContent = msg;
+  el.className = isErr ? "err" : "";
+}
+
+// ---------- Azioni ----------
+function toggleRelay(idx, on){
+  state.relays[idx] = on;
+  pendingMsgs.push(`${NAMES[idx]}: ${on ? 'ACCESO' : 'SPENTO'}`);
+  render();
+  flush();
+}
+function setMode(idx, m){
+  if(state.modes[idx] === m) return;
+  state.modes[idx] = m;
+  pendingMsgs.push(m === 'AUTO'
+    ? `${NAMES[idx]}: modalità AUTO`
+    : `${NAMES[idx]}: modalità MANUALE (${state.relays[idx] ? 'ACCESO' : 'SPENTO'})`);
+  render();
+  flush();
+}
+
+// ---------- ThingSpeak: scrittura ----------
+// Valore da scrivere nel campo dello switch idx: 0/1 manuale, 2 = AUTO (solo switch 3 e 4)
+function fieldValue(idx){
+  if((idx === 2 || idx === 3) && state.modes[idx] === 'AUTO') return 2;
+  return state.relays[idx] ? 1 : 0;
+}
+
+function flush(){
+  if(busy || pendingMsgs.length === 0) return;
+  if(!cfg.channel || !cfg.writeKey){ openCfg(); return; }
+  busy = true;
+  const wait = Math.max(0, MIN_GAP_MS - (Date.now() - lastWrite));
+  setStatus(wait > 0 ? `Invio tra ${Math.ceil(wait/1000)} s…` : "Invio in corso…");
+  setTimeout(sendToThingSpeak, wait);
+}
+
+async function sendToThingSpeak(){
+  // scrive sempre tutti e 4 i campi con lo stato attuale (raggruppa più azioni ravvicinate)
+  const msgs = pendingMsgs;
+  pendingMsgs = [];
+  const url = "https://api.thingspeak.com/update?api_key=" + encodeURIComponent(cfg.writeKey)
+    + "&field1=" + fieldValue(0)
+    + "&field2=" + fieldValue(1)
+    + "&field3=" + fieldValue(2)
+    + "&field4=" + fieldValue(3);
+  try{
+    const r = await fetch(url);
+    const t = (await r.text()).trim();
+    if(!r.ok || t === "0") throw new Error("rifiutato da ThingSpeak");
+    lastWrite = Date.now();
+    setStatus("Salvato su ThingSpeak alle " + new Date().toLocaleTimeString("it-IT"));
+    sendTelegram(msgs);
+  }catch(e){
+    pendingMsgs = msgs.concat(pendingMsgs);   // riprova
+    lastWrite = Date.now();
+    setStatus("Invio non riuscito (" + e.message + "), riprovo…", true);
+  }
+  busy = false;
+  flush();
+}
+
+// ---------- Telegram ----------
+async function sendTelegram(msgs){
+  if(!cfg.botToken || !cfg.chatId){ return; }
+  const text = "Camper USB\n" + msgs.join("\n");
+  try{
+    const r = await fetch("https://api.telegram.org/bot" + encodeURIComponent(cfg.botToken)
+      + "/sendMessage?chat_id=" + encodeURIComponent(cfg.chatId)
+      + "&text=" + encodeURIComponent(text));
+    if(!r.ok) throw new Error("HTTP " + r.status);
+  }catch(e){
+    setStatus("Salvato, ma messaggio Telegram non inviato (" + e.message + ")", true);
+  }
+}
+
+// ---------- ThingSpeak: lettura ----------
+async function readField(n){
+  let url = `https://api.thingspeak.com/channels/${encodeURIComponent(cfg.channel)}/fields/${n}/last.json`;
+  if(cfg.readKey) url += "?api_key=" + encodeURIComponent(cfg.readKey);
+  const r = await fetch(url, {cache:"no-store"});
+  if(!r.ok) throw new Error("HTTP " + r.status);
+  const j = await r.json();
+  const v = j["field" + n];
+  return (v === undefined || v === null) ? null : String(v).trim();
+}
+
+async function refresh(){
+  if(busy || pendingMsgs.length > 0) return;       // non sovrascrivere modifiche in corso
+  if(!cfg.channel){ return; }
+  try{
+    const v = await Promise.all([1,2,3,4].map(readField));
+    if(busy || pendingMsgs.length > 0) return;
+    [0,1].forEach(i => { if(v[i] !== null) state.relays[i] = (v[i] === "1"); });
+    [2,3].forEach(i => {
+      if(v[i] !== null){
+        if(v[i] === "2"){ state.modes[i] = "AUTO"; }
+        else { state.modes[i] = "MANUAL"; state.relays[i] = (v[i] === "1"); }
+      }
+    });
+    render();
+    setStatus("Aggiornato alle " + new Date().toLocaleTimeString("it-IT"));
+  }catch(e){
+    setStatus("Lettura non riuscita (" + e.message + ")", true);
+  }
+}
+
+// ---------- Impostazioni ----------
+const dlg = document.getElementById("cfgDlg");
+function openCfg(){
+  document.getElementById("cChannel").value = cfg.channel  || "";
+  document.getElementById("cWrite").value   = cfg.writeKey || "";
+  document.getElementById("cRead").value    = cfg.readKey  || "";
+  document.getElementById("cBot").value     = cfg.botToken || "";
+  document.getElementById("cChat").value    = cfg.chatId   || "";
+  if(!dlg.open) dlg.showModal();
+}
+document.getElementById("openCfg").onclick = openCfg;
+document.getElementById("cancelCfg").onclick = () => dlg.close();
+document.getElementById("saveCfg").onclick = () => {
+  cfg = {
+    channel:  document.getElementById("cChannel").value.trim(),
+    writeKey: document.getElementById("cWrite").value.trim(),
+    readKey:  document.getElementById("cRead").value.trim(),
+    botToken: document.getElementById("cBot").value.trim(),
+    chatId:   document.getElementById("cChat").value.trim()
+  };
+  saveCfg(cfg);
+  dlg.close();
+  refresh();
+  flush();
+};
+
+// ---------- Avvio ----------
+render();
+if(!cfg.channel || !cfg.writeKey){ openCfg(); } else { refresh(); }
+setInterval(refresh, POLL_MS);
+</script>
+</body>
+</html>
